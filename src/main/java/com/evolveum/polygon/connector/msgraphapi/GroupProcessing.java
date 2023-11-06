@@ -561,7 +561,7 @@ public class GroupProcessing extends ObjectProcessing {
         builder.setObjectClass(ObjectClass.GROUP);
 
         getUIDIfExists(group, ATTR_ID, builder);
-        getNAMEIfExists(group, ATTR_DISPLAYNAME, builder);
+        getNAMEIfExists(group, ATTR_ID, builder);
 
         getIfExists(group, ATTR_DISPLAYNAME, String.class, builder);
         getIfExists(group, ATTR_DESCRIPTION, String.class, builder);
@@ -593,7 +593,7 @@ public class GroupProcessing extends ObjectProcessing {
 
     public String getNameAttribute() {
 
-        return ATTR_DISPLAYNAME;
+        return ATTR_ID;
     }
 
     public String getUIDAttribute() {

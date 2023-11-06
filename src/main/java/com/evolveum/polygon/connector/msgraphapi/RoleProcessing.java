@@ -61,7 +61,10 @@ public class RoleProcessing extends ObjectProcessing {
 
         // required attribute is icfs:name and icfs:uid
 
-        // optional
+        // optional??
+        AttributeInfoBuilder attrDisplayName = new AttributeInfoBuilder(ATTR_DISPLAY_NAME);
+        attrDisplayName.setRequired(true).setType(String.class).setCreateable(true).setUpdateable(true).setReadable(true);
+        roleObjClassBuilder.addAttributeInfo(attrDisplayName.build());
 
         // read-only
         AttributeInfoBuilder attrIsEnabled = new AttributeInfoBuilder(ATTR_IS_ENABLED);
@@ -241,10 +244,10 @@ public class RoleProcessing extends ObjectProcessing {
                 if (nameValue == null) {
                     invalidAttributeValue("Name", query);
                 }
-                final String customQuery = "$filter=" + ATTR_DISPLAY_NAME + " eq '" + nameValue + "'";
+                final String customQuery = "$filter=" + ATTR_ID + " eq '" + nameValue + "'";
                 // Paging is not supported
                 endpoint.executeListRequest(ROLES, customQuery, options, false, createJSONObjectHandler(handler));
-            } else if (ATTR_DISPLAY_NAME.equals(attributeName)) {
+            } else if (ATTR_ID.equals(attributeName)) {
                 final String attributeValue = getAttributeFirstValue(equalsFilter);
                 final String customQuery = "$filter=" + attributeName + " eq '" + attributeValue + "'";
                 // Paging is not supported
@@ -255,7 +258,7 @@ public class RoleProcessing extends ObjectProcessing {
             final ContainsFilter containsFilter = (ContainsFilter) query;
             final String attributeName = containsFilter.getAttribute().getName();
             final String attributeValue = getAttributeFirstValue(containsFilter);
-            if (Arrays.asList(ATTR_DISPLAY_NAME).contains(attributeName)) {
+            if (Arrays.asList(ATTR_ID).contains(attributeName)) {
                 String customQuery = "$filter=" + STARTSWITH + "(" + attributeName + ",'" + attributeValue + "')";
                 // Paging is not supported
                 endpoint.executeListRequest(ROLES, customQuery, options, false, createJSONObjectHandler(handler));
@@ -352,9 +355,10 @@ public class RoleProcessing extends ObjectProcessing {
 
         // UID + NAME
         getUIDIfExists(role, ATTR_ID, builder);
-        getNAMEIfExists(role, ATTR_DISPLAY_NAME, builder);
+        getNAMEIfExists(role, ATTR_ID, builder);
 
         // single valued
+        getIfExists(role, ATTR_DISPLAY_NAME, String.class, builder);
         getIfExists(role, ATTR_DESCRIPTION, String.class, builder);
         getIfExists(role, ATTR_IS_BUILT_IN, Boolean.class, builder);
         getIfExists(role, ATTR_IS_ENABLED, Boolean.class, builder);
@@ -375,7 +379,7 @@ public class RoleProcessing extends ObjectProcessing {
 
     public String getNameAttribute(){
 
-        return ATTR_DISPLAY_NAME;
+        return ATTR_ID;
     }
 
     public String getUIDAttribute(){
