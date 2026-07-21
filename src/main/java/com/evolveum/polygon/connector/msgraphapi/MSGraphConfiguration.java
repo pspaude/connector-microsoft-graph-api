@@ -12,7 +12,6 @@ import org.identityconnectors.framework.spi.StatefulConfiguration;
 
 import java.net.InetSocketAddress;
 
-
 public class MSGraphConfiguration extends AbstractConfiguration
         implements StatefulConfiguration {
 
@@ -41,7 +40,16 @@ public class MSGraphConfiguration extends AbstractConfiguration
 
     private boolean treatNetIdAsAlreadyExists;
     private boolean validateWithFailoverTrust = true;
+
+    private Integer postCreateReadRetryBaseDelayMs = 500;
+    private Integer postCreateReadMaxRetryCount = 5;
+
     private GraphConfigurationHandler configHandler = new GraphConfigurationHandler();
+
+    // Generic schema
+    private boolean discoverSchema = false;
+    private boolean ignorePersonalSites = true;
+    private String expectedPropertyNames = "Name,Title,TitleLink";
 
     @ConfigurationProperty(order = 10, displayMessageKey = "ClientId.display", helpMessageKey = "ClientId.help", required = true)
 
@@ -187,10 +195,7 @@ public class MSGraphConfiguration extends AbstractConfiguration
 
     @ConfigurationProperty(order = 110, displayMessageKey = "ThrottlingMaxWait.display", helpMessageKey = "ThrottlingMaxWait.help")
 
-    public String getThrottlingRetryWait() {
-
-        return throttlingRetryWait;
-    }
+    public String getThrottlingRetryWait() { return throttlingRetryWait; }
 
     public void setThrottlingRetryWait(String throttlingRetryWait) {
         this.throttlingRetryWait = throttlingRetryWait;
@@ -219,6 +224,59 @@ public class MSGraphConfiguration extends AbstractConfiguration
     public boolean getTreatNetIdAsAlreadyExists() { return treatNetIdAsAlreadyExists; }
 
     public void setTreatNetIdAsAlreadyExists(boolean treatNetIdAsAlreadyExists) { this.treatNetIdAsAlreadyExists = treatNetIdAsAlreadyExists; }
+
+    @ConfigurationProperty(order = 160, displayMessageKey = "PostCreateReadRetryBaseDelayMs.display", helpMessageKey = "PostCreateReadRetryBaseDelayMs.help")
+    public Integer getPostCreateReadRetryBaseDelayMs() {
+        return postCreateReadRetryBaseDelayMs;
+    }
+
+    public void setPostCreateReadRetryBaseDelayMs(Integer postCreateReadRetryBaseDelayMs) {
+        this.postCreateReadRetryBaseDelayMs = postCreateReadRetryBaseDelayMs;
+    }
+
+    @ConfigurationProperty(order = 170, displayMessageKey = "PostCreateReadMaxRetryCount.display", helpMessageKey = "PostCreateReadMaxRetryCount.help")
+    public Integer getPostCreateReadMaxRetryCount() {
+        return postCreateReadMaxRetryCount;
+    }
+
+    public void setPostCreateReadMaxRetryCount(Integer postCreateReadMaxRetryCount) {
+        this.postCreateReadMaxRetryCount = postCreateReadMaxRetryCount;
+    }
+
+    @ConfigurationProperty(order = 180, displayMessageKey = "IgnorePersonalSites.display", helpMessageKey = "IgnorePersonalSites.help")
+    public boolean getIgnorePersonalSites() {
+        return ignorePersonalSites;
+    }
+
+    public void setIgnorePersonalSites(boolean ignorePersonalSites) {
+        this.ignorePersonalSites = ignorePersonalSites;
+    }
+
+    @ConfigurationProperty(
+            order = 190,
+            displayMessageKey = "ExpectedPropertyNames.display",
+            helpMessageKey = "ExpectedPropertyNames.help"
+    )
+    public String getExpectedPropertyNames() {
+        return expectedPropertyNames;
+    }
+
+    public void setExpectedPropertyNames(String expectedPropertyNames) {
+        this.expectedPropertyNames = expectedPropertyNames;
+    }
+
+    @ConfigurationProperty(order = 200,
+            displayMessageKey = "DiscoverSchema.display",
+            helpMessageKey = "DiscoverSchema.help",
+            required = true
+    )
+    public boolean isDiscoverSchema() {
+        return discoverSchema;
+    }
+
+    public void setDiscoverSchema(boolean discoverSchema) {
+        this.discoverSchema = discoverSchema;
+    }
 
     @Override
     public void validate() {
@@ -276,6 +334,16 @@ public class MSGraphConfiguration extends AbstractConfiguration
 
             throw new ConfigurationException("The specified number for the maximum throttling request retries has to be " +
                     "a non negative number!");
+        }
+
+        if (postCreateReadRetryBaseDelayMs < 0) {
+            throw new ConfigurationException("The specified number for the post create read retry base delay in ms has to be " +
+                    "greater than zero!");
+        }
+
+        if (postCreateReadMaxRetryCount < 0) {
+            throw new ConfigurationException("The specified number for the post create read max retry count has to be " +
+                    "greater than zero!");
         }
 
         LOG.info("Configuration valid");

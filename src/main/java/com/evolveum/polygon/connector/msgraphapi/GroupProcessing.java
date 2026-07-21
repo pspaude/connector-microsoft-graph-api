@@ -5,6 +5,7 @@ import org.apache.http.client.methods.*;
 import org.apache.http.client.utils.URIBuilder;
 import org.identityconnectors.framework.common.exceptions.AlreadyExistsException;
 import org.identityconnectors.framework.common.exceptions.InvalidAttributeValueException;
+import org.identityconnectors.framework.common.exceptions.OperationTimeoutException;
 import org.identityconnectors.framework.common.objects.*;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -43,6 +44,7 @@ public class GroupProcessing extends ObjectProcessing {
     private static final String ATTR_SECURITYENABLED = "securityEnabled";
     private static final String ATTR_UNSEENCOUNT = "unseenCount";
     private static final String ATTR_VISIBILITY = "visibility";
+    private static final String ATTR_ISASSIGNABLETOROLE = "isAssignableToRole";
     private static final String ATTR_MEMBERS = "members";
     private static final String ATTR_OWNERS = "owners";
 
@@ -178,6 +180,10 @@ public class GroupProcessing extends ObjectProcessing {
         attrVisibility.setRequired(false).setType(String.class).setCreateable(true).setUpdateable(true).setReadable(true);
         groupObjClassBuilder.addAttributeInfo(attrVisibility.build());
 
+        AttributeInfoBuilder attrIsAssignableToRole = new AttributeInfoBuilder(ATTR_ISASSIGNABLETOROLE);
+        attrIsAssignableToRole.setRequired(false).setType(Boolean.class).setCreateable(true).setUpdateable(false).setReadable(true);
+        groupObjClassBuilder.addAttributeInfo(attrIsAssignableToRole.build());
+
         AttributeInfoBuilder attrMembers = new AttributeInfoBuilder(ATTR_MEMBERS);
         attrMembers.setType(String.class).setCreateable(true).setUpdateable(true).setReadable(true).setMultiValued(true).setReturnedByDefault(false);
         groupObjClassBuilder.addAttributeInfo(attrMembers.build());
@@ -203,6 +209,27 @@ public class GroupProcessing extends ObjectProcessing {
         LOG.info("Path: {0}", uri);
         HttpEntityEnclosingRequestBase request = new HttpPost(uri);
         JSONObject jsonObject = buildLayeredAttributeJSON(attributes, EXCLUDE_ATTRS_OF_GROUP);
+        String groupDisplayName = jsonObject.getString(getNameAttribute());
+
+        // Tentatively create group with owners or members if present
+        // When owners are not present the group is set as unmodifiable
+        // For more information refer to https://learn.microsoft.com/en-us/graph/api/group-post-groups?view=graph-rest-1.0&tabs=http
+        // This is valid for security group creation
+        Attribute members = null;
+        Attribute owners = null;
+        for (Attribute attribute: attributes) {
+            switch (attribute.getName()) {
+                case ATTR_MEMBERS:
+                    members = attribute;
+                    break;
+                case ATTR_OWNERS:
+                    owners = attribute;
+                    break;
+            }
+        }
+        jsonObject = addIfExistsGroupAccountsToGroup(jsonObject, members, true);
+        jsonObject = addIfExistsGroupAccountsToGroup(jsonObject, owners, false);
+
 
         // For historical reason, Groups are allowed to duplicate displayName (Reference: https://morgansimonsen.com/2016/06/28/azure-ad-allows-duplicate-group-names/).
         // However, Microsoft strives to avoid group created with duplicated names. For example, duplicate Group creation from the UI will result in an error.
@@ -212,7 +239,7 @@ public class GroupProcessing extends ObjectProcessing {
         // freshly created Groups and will result in the creation of duplicate Groups.
         // This is unavoidable due to the system design of Azure AD.
         // (Reference: https://github.com/MicrosoftDocs/azure-docs/issues/94121#issuecomment-1191792188)
-        if (isExist(jsonObject.getString(getNameAttribute()))) {
+        if (isExist(groupDisplayName)) {
             throw new AlreadyExistsException("Another object with the same value for property displayName already exists");
         }
 
@@ -220,6 +247,12 @@ public class GroupProcessing extends ObjectProcessing {
 
         String newUid = jsonAnswer.getString("id");
         LOG.info("The new Uid is {0} ", newUid);
+
+        // It is necessary to wait until the group can be reliably found by its displayName,
+        // i.e., until the synchronization on the Entra ID is fully completed.
+        // Without this wait, there is a risk that connector will create the group multiple times
+        // with the same displayName, due to temporary inconsistency.
+        groupSyncFinishedCheck(groupDisplayName, endpoint.getConfiguration());
 
         return new Uid(newUid);
     }
@@ -276,6 +309,28 @@ public class GroupProcessing extends ObjectProcessing {
         addOrRemoveOwner(uid, owners, GROUPS);
 
         return null;
+    }
+
+    private void groupSyncFinishedCheck(String displayName, MSGraphConfiguration configuration) {
+        int getGroupByNameRetryCount = 0;
+        do {
+            if (isExist(displayName)) {
+                LOG.ok("Group with displayName {0} FOUND in createOp, retry count: {1}", displayName, getGroupByNameRetryCount);
+                return;
+            }
+            else {
+                getGroupByNameRetryCount++;
+                try {
+                    long sleepTime = configuration.getPostCreateReadRetryBaseDelayMs() * (1L << (getGroupByNameRetryCount - 1));
+                    LOG.warn("Group with displayName {0} NOT found in createOp at loop iteration: {1}. Retrying after {2} ms", displayName, getGroupByNameRetryCount - 1, sleepTime);
+                    Thread.sleep(sleepTime);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        } while (getGroupByNameRetryCount < configuration.getPostCreateReadMaxRetryCount());
+
+        throw new OperationTimeoutException("Maximum retry attempts '" + configuration.getPostCreateReadMaxRetryCount() + "' were exceeded!. Couldn't find freshly created group in createOp.");
     }
 
     protected boolean isExist(String displayName) {
@@ -534,6 +589,34 @@ public class GroupProcessing extends ObjectProcessing {
         return group;
     }
 
+    /**
+     * Adds group accounts to the group JSON Object. Decides upon members or owners based on @param isMembers.
+     * @param group Original group object to extend with owners or members account ids
+     * @param accounts Attribute of account ids
+     * @param isMembers Flag to determine whether to add members or owners
+     * @return JSONObject of group with respective owners or members key.
+     */
+    private JSONObject addIfExistsGroupAccountsToGroup(JSONObject group, Attribute accounts, boolean isMembers) {
+        if (accounts == null) {
+            return group;
+        }
+        final GraphEndpoint endpoint = getGraphEndpoint();
+
+        JSONArray json = new JSONArray();
+        accounts.getValue().forEach( it -> {
+            final String ownerQuery = USERS + "/" + it.toString();
+            try {
+                json.put(endpoint.createURIBuilder().setPath(ownerQuery).build().toString());
+            } catch (Exception e) {
+                // Unable to create an URI from member
+            }
+        });
+        String key = isMembers ? "members@odata.bind" : "owners@odata.bind";
+
+        group.put(key, json);
+        return group;
+    }
+
     @Override
     protected boolean handleJSONObject(OperationOptions options, JSONObject group, ResultsHandler handler) {
         LOG.ok("handleJSONObject");
@@ -579,6 +662,7 @@ public class GroupProcessing extends ObjectProcessing {
         getIfExists(group, ATTR_VISIBILITY, String.class, builder);
         getIfExists(group, ATTR_CREATEDDATETIME, String.class, builder);
         getIfExists(group, ATTR_CLASSIFICATION, String.class, builder);
+        getIfExists(group, ATTR_ISASSIGNABLETOROLE, Boolean.class, builder);
 
         getIfExists(group, ATTR_ALLOWEXTERNALSENDERS, Boolean.class, builder);
         getIfExists(group, ATTR_AUTOSUBSCRIBENEWMEMBERS, Boolean.class, builder);
